@@ -7,6 +7,7 @@ using System.IO;
 using System.Threading.Tasks;
 using System.Threading;
 using System.Linq;
+using System.Net;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -72,7 +73,7 @@ namespace CYPCore.Extensions
                 var stakingConfigurationOptions = new StakingConfigurationOptions();
                 configuration.Bind("Staking", stakingConfigurationOptions);
                 var posMintingProvider = new PosMinting(c.Resolve<IGraph>(), c.Resolve<IMemoryPool>(),
-                    c.Resolve<ISerfClient>(), c.Resolve<IUnitOfWork>(), c.Resolve<ISigning>(), c.Resolve<IValidator>(),
+                    c.Resolve<ISerfClientV2>(), c.Resolve<IUnitOfWork>(), c.Resolve<ISigning>(), c.Resolve<IValidator>(),
                     c.Resolve<ISync>(), stakingConfigurationOptions, c.Resolve<Serilog.ILogger>());
                 return posMintingProvider;
             }).As<IStartable>().SingleInstance();
@@ -135,10 +136,10 @@ namespace CYPCore.Extensions
                 configuration.Bind("Serf", serfConfigurationOptions);
                 configuration.Bind("Api", apiConfigurationOptions);
                 var logger = c.Resolve<Serilog.ILogger>();
-                var serfClient = new SerfClient(c.Resolve<ISigning>(), serfConfigurationOptions,
+                var serfClient = new SerfClientV2(c.Resolve<ISigning>(), serfConfigurationOptions,
                     apiConfigurationOptions, serfSeedNodes, logger);
                 return serfClient;
-            }).As<ISerfClient>().SingleInstance();
+            }).As<ISerfClientV2>().SingleInstance();
             return builder;
         }
 
@@ -196,7 +197,7 @@ namespace CYPCore.Extensions
                     var localNode = c.Resolve<ILocalNode>();
                     var signing = c.Resolve<ISigning>();
                     var lifetime = c.Resolve<IHostApplicationLifetime>();
-                    var serfClient = c.Resolve<ISerfClient>();
+                    var serfClient = c.Resolve<ISerfClientV2>();
                     serfService = nodeMonitorConfigurationOptions.Enabled
                         ? new SerfServiceTester(serfClient, signing, logger)
                         : new SerfService(serfClient, signing, logger);
@@ -208,23 +209,12 @@ namespace CYPCore.Extensions
                         Task.Delay(100, ct.Token);
                     }
 
-                    var tcpSession = serfClient.TcpSessionsAddOrUpdate(
-                        new TcpSession(serfClient.SerfConfigurationOptions.Listening).Connect(serfClient
-                            .SerfConfigurationOptions.RPC));
-                    var connectResult = serfClient.Connect(tcpSession.SessionId).GetAwaiter().GetResult();
-                    if (connectResult.Success)
-                    {
-                        var nodes = configuration.GetSection("SeedNodes").Get<List<string>>();
-                        if (!nodes.Any()) return serfService;
-                        var seedNodes = new SeedNode(nodes.Select(x => x));
-                        serfService.JoinSeedNodes(seedNodes).GetAwaiter();
-                    }
-                    else
-                    {
-                        logger.Here().Error("{@Error}", ((SerfError)connectResult.NonSuccessMessage).Error);
-                    }
-
-                    localNode.Ready();
+                    serfClient.Connect(new IPEndPoint(IPAddress.Parse("127.0.0.1"), 7373));
+                    
+                    var nodes = configuration.GetSection("SeedNodes").Get<List<string>>();
+                    if (!nodes.Any()) return serfService;
+                    var seedNodes = new SeedNode(nodes.Select(x => x));
+                    serfService.JoinSeedNodes(seedNodes).GetAwaiter();
                 }
                 catch (TaskCanceledException ex)
                 {

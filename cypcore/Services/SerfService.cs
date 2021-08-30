@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Diagnostics;
 using System.IO;
+using System.Net;
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Threading;
@@ -33,21 +34,17 @@ namespace CYPCore.Services
 
     public class SerfService : ISerfService
     {
-        private readonly ISerfClient _serfClient;
+        private readonly ISerfClientV2 _serfClient;
         private readonly ISigning _signing;
         private readonly ILogger _logger;
-        private readonly TcpSession _tcpSession;
 
         public bool Disabled { get; private set; }
 
-        public SerfService(ISerfClient serfClient, ISigning signing, ILogger logger)
+        public SerfService(ISerfClientV2 serfClient, ISigning signing, ILogger logger)
         {
             _serfClient = serfClient;
             _signing = signing;
             _logger = logger.ForContext("SourceContext", nameof(SerfService));
-
-            _tcpSession = _serfClient.TcpSessionsAddOrUpdate(new TcpSession(
-                serfClient.SerfConfigurationOptions.Listening).Connect(_serfClient.SerfConfigurationOptions.RPC));
         }
 
         /// <summary>
@@ -234,43 +231,31 @@ namespace CYPCore.Services
             {
                 if (IsRunning())
                 {
-                    var tcpSession = _serfClient.GetTcpSession(_tcpSession.SessionId);
-                    var connectResult = await _serfClient.Connect(tcpSession.SessionId);
-
-                    if (!connectResult.Success)
-                    {
-                        cancellationToken.Cancel();
-                        return connect;
-                    }
-
-                    var membersResult = await _serfClient.Members(tcpSession.SessionId);
-                    if (!membersResult.Success)
-                    {
-                        cancellationToken.Cancel();
-                        return connect;
-                    }
-
                     var pubkey = await _signing.GetPublicKey(_signing.DefaultSigningKeyName);
-                    if (pubkey == null)
-                    {
-                        cancellationToken.Cancel();
-                    }
-                    else
+                    if (pubkey != null)
                     {
                         try
                         {
-                            if (null != membersResult.Value.Members
-                                .Where(member =>
-                                    _serfClient.Name != member.Name && member.Status == "alive" && member.Tags.Count != 0)
-                                .FirstOrDefault(x => x.Tags["pubkey"] == pubkey.ByteToHex()))
+                            _serfClient.GetMembers(members =>
                             {
-                                connect = true;
-                            }
+                                if (null != members.Members
+                                    .Where(member =>
+                                        _serfClient.Name != member.Name && member.Status == "alive" &&
+                                        member.Tags.Count != 0)
+                                    .FirstOrDefault(x => x.Tags["pubkey"] == pubkey.ByteToHex()))
+                                {
+                                    connect = true;
+                                }
+                            });
                         }
                         catch (KeyNotFoundException keyNotFoundException)
                         {
                             _logger.Here().Error(keyNotFoundException, "Public key was not found in member list");
                         }
+                    }
+                    else
+                    {
+                        cancellationToken.Cancel();
                     }
                 }
                 else
@@ -280,7 +265,7 @@ namespace CYPCore.Services
             }
             catch (OperationCanceledException)
             {
-
+                // Ignore
             }
 
             return connect;
@@ -290,35 +275,27 @@ namespace CYPCore.Services
         /// 
         /// </summary>
         /// <param name="seedNode"></param>
-        public async Task<bool> JoinSeedNodes(SeedNode seedNode)
+        public Task<bool> JoinSeedNodes(SeedNode seedNode)
         {
+            var tcs = new TaskCompletionSource<bool>();
+            
             try
             {
-                var tcpSession = _serfClient.GetTcpSession(_tcpSession.SessionId);
-                if (!tcpSession.Ready)
+                _serfClient.Join(seedNode.Seeds, peers =>
                 {
-                    tcpSession = tcpSession.Connect(_serfClient.SerfConfigurationOptions.RPC);
-                    await _serfClient.Connect(tcpSession.SessionId);
-                }
+                    JoinedSeedNodes = true;
+                    _serfClient.SeedNodes.Seeds.AddRange(seedNode.Seeds);
 
-                var joinResult = await _serfClient.Join(seedNode.Seeds, tcpSession.SessionId);
-                if (!joinResult.Success)
-                {
-                    _logger.Here().Error(((SerfError)joinResult.NonSuccessMessage).Error);
-                    return false;
-                }
-
-                JoinedSeedNodes = true;
-                _serfClient.SeedNodes.Seeds.AddRange(seedNode.Seeds);
-
-                _logger.Here().Information("Serf might still be trying to join the seed nodes. Number of nodes joined: {@NumPeers}", joinResult.Value.Peers.ToString());
-                return true;
+                    tcs.SetResult(true);
+                });
             }
             catch (Exception ex)
             {
                 _logger.Here().Fatal(ex, $"Unable to create Serf RPC address");
-                return false;
+                tcs.SetResult(false);
             }
+
+            return tcs.Task;
         }
 
         public bool JoinedSeedNodes { get; private set; }

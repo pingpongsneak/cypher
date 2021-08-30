@@ -39,11 +39,11 @@ namespace CYPCore.Ledger
 
     public sealed class Graph : IGraph
     {
-        public const double BlockmaniaTimeSlotSeconds = 1.5;
+        private const double BlockmaniaTimeSlotSeconds = 1.5;
 
         private readonly IUnitOfWork _unitOfWork;
         private readonly ILocalNode _localNode;
-        private readonly ISerfClient _serfClient;
+        private readonly ISerfClientV2 _serfClient;
         private readonly IValidator _validator;
         private readonly ISigning _signing;
         private readonly ILogger _logger;
@@ -64,7 +64,7 @@ namespace CYPCore.Ledger
 
         private EventHandler<BlockGraphEventArgs> _blockGraphAddCompletedEventHandler;
 
-        public Graph(IUnitOfWork unitOfWork, ILocalNode localNode, ISerfClient serfClient, IValidator validator,
+        public Graph(IUnitOfWork unitOfWork, ILocalNode localNode, ISerfClientV2 serfClient, IValidator validator,
             ISigning signing, IHostApplicationLifetime applicationLifetime, ILogger logger)
         {
             _unitOfWork = unitOfWork;
@@ -498,7 +498,7 @@ namespace CYPCore.Ledger
         private async Task DecideWinnerAsync()
         {
             List<Block> deliveredBlocks = null;
-            long height = 0;
+            long height;
             
             try
             {

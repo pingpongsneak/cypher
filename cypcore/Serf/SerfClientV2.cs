@@ -6,8 +6,13 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using CYPCore.Cryptography;
+using CYPCore.Extensions;
+using CYPCore.Helper;
+using CYPCore.Models;
 using CYPCore.Serf.Message;
 using MessagePack;
+using Serilog;
 
 namespace CYPCore.Serf
 {
@@ -59,7 +64,19 @@ namespace CYPCore.Serf
     /// </summary>
     public interface ISerfClientV2
     {
+        ulong ClientId { get; }
+        string ProcessError { get; set; }
+        bool ProcessStarted { get; set; }
+        int ProcessId { get; set; }
+        string Name { get; set; }
+        SerfConfigurationOptions SerfConfigurationOptions { get; }
+        ApiConfigurationOptions ApiConfigurationOptions { get; }
+        SerfSeedNodes SeedNodes { get; }
         public bool IsActive { get; }
+        void GetMembers(Action<MembersResponse> action);
+        Task<int> MembersCount();
+        void Join(IEnumerable<string> members, Action<JoinResponse> action);
+        void Connect(IPEndPoint endpoint, TimeSpan timeout = default);
     }
     
     /// <summary>
@@ -67,21 +84,44 @@ namespace CYPCore.Serf
     /// </summary>
     public class SerfClientV2: ISerfClientV2
     {
+        public ulong ClientId { get; private set; }
+        public string ProcessError { get; set; }
+        public bool ProcessStarted { get; set; }
+        public int ProcessId { get; set; }
+        public string Name { get; set; }
+        public SerfConfigurationOptions SerfConfigurationOptions { get; }
+        public ApiConfigurationOptions ApiConfigurationOptions { get; }
+        public SerfSeedNodes SeedNodes { get; }
         public bool IsActive { get; private set; }
         private TcpClient _tcpClient;
         private NetworkStream _stream;
         private long _sequence;
         private IPEndPoint _endpoint;
         private readonly List<IMessageHandler> _handlers = new();
+        private readonly ISigning _signing;
+        private readonly ILogger _logger;
 
+        public SerfClientV2(ISigning signing, SerfConfigurationOptions serfConfigurationOptions,
+            ApiConfigurationOptions apiConfigurationOptions, SerfSeedNodes seedNodes, ILogger logger)
+        {
+            _signing = signing;
+            _logger = logger.ForContext("SourceContext", nameof(SerfClient));
+
+            SerfConfigurationOptions = serfConfigurationOptions;
+            ApiConfigurationOptions = apiConfigurationOptions;
+            SeedNodes = seedNodes;
+            
+            SetClientId().SafeFireAndForget(exception => { _logger.Here().Error(exception, "Setting client id error"); });
+        }
+        
         /// <summary>
         /// 
         /// </summary>
-        public void Join(IEnumerable<string> members)
+        public void Join(IEnumerable<string> members, Action<JoinResponse> action)
         {
             var header = new RequestHeader {Command = SerfCommandLine.Join, Sequence = GetSeq()};
             var join = new JoinRequest {Existing = members.ToArray()};
-            Send(header, join);
+            Send(header, join, action);
         }
         
         /// <summary>
@@ -112,6 +152,24 @@ namespace CYPCore.Serf
             };
             
             Send(header, action);
+        }
+        
+        /// <summary>
+        /// 
+        /// </summary>
+        public async Task SetClientId()
+        {
+            ulong clientId;
+
+            try
+            {
+                var pubKey = await _signing.GetPublicKey(_signing.DefaultSigningKeyName);
+                ClientId = Util.HashToId(pubKey.ByteToHex());
+            }
+            catch (Exception ex)
+            {
+                _logger.Here().Error(ex, "Cannot get client ID");
+            }
         }
         
         /// <summary>
@@ -262,12 +320,14 @@ namespace CYPCore.Serf
         /// </summary>
         /// <param name="requestHeader"></param>
         /// <param name="joinRequest"></param>
-        private void Send(RequestHeader requestHeader, JoinRequest joinRequest)
+        private void Send(RequestHeader requestHeader, JoinRequest joinRequest, Action<JoinResponse> action)
         {
             var headerBytes = MessagePackSerializer.Serialize(requestHeader);
             var commandBytes = MessagePackSerializer.Serialize(joinRequest);
             var instructionBytes = headerBytes.Concat(commandBytes).ToArray();
 
+            Register(requestHeader, action);
+            
             _stream.WriteAsync(instructionBytes, 0, instructionBytes.Length);
             _stream.Flush();
         }

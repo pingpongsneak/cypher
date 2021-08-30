@@ -21,11 +21,8 @@ namespace CYPCore.Network
         Task Broadcast(TopicType topicType, byte[] data);
         Task Broadcast(Peer[] peers, TopicType topicType, byte[] data);
         Task<Dictionary<ulong, Peer>> GetPeers();
-        void Ready();
-        Task Leave();
-        Task JoinSeedNodes();
         Task<ulong[]> Nodes();
-        public ISerfClient SerfClient { get; }
+        public ISerfClientV2 SerfClient { get; }
     }
 
     /// <summary>
@@ -33,24 +30,17 @@ namespace CYPCore.Network
     /// </summary>
     public class LocalNode : ILocalNode
     {
-        private readonly ISerfClient _serfClient;
+        private readonly ISerfClientV2 _serfClient;
         private readonly NetworkClient _networkClient;
         private readonly ILogger _logger;
         private TcpSession _tcpSession;
 
-        public LocalNode(ISerfClient serfClient, NetworkClient networkClient, ILogger logger)
+        public LocalNode(ISerfClientV2 serfClient, NetworkClient networkClient, ILogger logger)
         {
             _serfClient = serfClient;
             _networkClient = networkClient;
             _logger = logger.ForContext("SourceContext", nameof(LocalNode));
             SerfClient = _serfClient;
-        }
-
-        public void Ready()
-        {
-            _tcpSession = _serfClient.TcpSessionsAddOrUpdate(
-                new TcpSession(_serfClient.SerfConfigurationOptions.Listening).Connect(_serfClient
-                    .SerfConfigurationOptions.RPC));
         }
 
         /// <summary>
@@ -126,117 +116,64 @@ namespace CYPCore.Network
         /// 
         /// </summary>
         /// <returns></returns>
-        public async Task<Dictionary<ulong, Peer>> GetPeers()
+        public Task<Dictionary<ulong, Peer>> GetPeers()
         {
-            var peers = new Dictionary<ulong, Peer>();
+            var tcs = new TaskCompletionSource<Dictionary<ulong, Peer>>();
             
             try
             {
-                if (_tcpSession == null)
+                _serfClient.GetMembers(members =>
                 {
-                    Ready();
-                }
-
-                var tcpSession = _serfClient.GetTcpSession(_tcpSession.SessionId);
-                _ = await _serfClient.Connect(tcpSession.SessionId);
-                if (!tcpSession.Ready)
-                {
-                    _logger.Here().Error("Serf client failed to connect");
-                    return null;
-                }
-
-                var membersResult = await _serfClient.Members(tcpSession.SessionId);
-                var members = membersResult.Value.Members.ToList();
-                foreach (var member in members.Where(member =>
-                    _serfClient.Name != member.Name &&
-                    member.Status == "alive" &&
-                    member.Tags.ContainsKey("pubkey") &&
-                    member.Tags.ContainsKey("rest")))
-                {
-                    try
+                    var peers = new Dictionary<ulong, Peer>();
+                    foreach (var member in members.Members.Where(member =>
+                        _serfClient.Name != member.Name &&
+                        member.Status == "alive" &&
+                        member.Tags.ContainsKey("pubkey") &&
+                        member.Tags.ContainsKey("rest")))
                     {
-                        if (_serfClient.ClientId == Helper.Util.HashToId(member.Tags["pubkey"])) continue;
-                        member.Tags.TryGetValue("rest", out var restEndpoint);
-                        if (string.IsNullOrEmpty(restEndpoint)) continue;
-                        if (!Uri.TryCreate($"{restEndpoint}", UriKind.Absolute, out var uri)) continue;
-                        if (uri.Host is "0.0.0.0" or "::0")
+                        try
                         {
-                            continue;
+                            if (_serfClient.ClientId == Helper.Util.HashToId(member.Tags["pubkey"])) continue;
+                            member.Tags.TryGetValue("rest", out var restEndpoint);
+                            if (string.IsNullOrEmpty(restEndpoint)) continue;
+                            if (!Uri.TryCreate($"{restEndpoint}", UriKind.Absolute, out var uri)) continue;
+                            if (uri.Host is "0.0.0.0" or "::0")
+                            {
+                                continue;
+                            }
+
+                            member.Tags.TryGetValue("nodeversion", out var nodeVersion);
+
+                            var peer = new Peer
+                            {
+                                Host = uri.OriginalString,
+                                ClientId = Helper.Util.HashToId(member.Tags["pubkey"]),
+                                PublicKey = member.Tags["pubkey"],
+                                NodeName = member.Name,
+                                NodeVersion = nodeVersion ?? string.Empty
+                            };
+                            if (peers.ContainsKey(peer.ClientId)) continue;
+                            if (peers.TryAdd(peer.ClientId, peer)) continue;
+                            _logger.Here().Error("Failed adding or exists in remote nodes: {@Node}", member.Name);
                         }
-
-                        member.Tags.TryGetValue("nodeversion", out var nodeVersion);
-
-                        var peer = new Peer
+                        catch (Exception ex)
                         {
-                            Host = uri.OriginalString,
-                            ClientId = Helper.Util.HashToId(member.Tags["pubkey"]),
-                            PublicKey = member.Tags["pubkey"],
-                            NodeName = member.Name,
-                            NodeVersion = nodeVersion ?? string.Empty
-                        };
-                        if (peers.ContainsKey(peer.ClientId)) continue;
-                        if (peers.TryAdd(peer.ClientId, peer)) continue;
-                        _logger.Here().Error("Failed adding or exists in remote nodes: {@Node}", member.Name);
+                            _logger.Here().Error(ex, "Error reading member");
+                        }
                     }
-                    catch (Exception ex)
-                    {
-                        _logger.Here().Error(ex, "Error reading member");
-                    }
-                }
+                    tcs.SetResult(peers);
+                });
+                
             }
             catch (Exception ex)
             {
                 _logger.Here().Error(ex, "Error reading members");
+                tcs.SetResult(null);
             }
             
-            return peers;
+            return tcs.Task;
         }
 
-        public ISerfClient SerfClient { get; }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <returns></returns>
-        public async Task Leave()
-        {
-            if (_tcpSession == null)
-            {
-                Ready();
-            }
-
-            var tcpSession = _serfClient.GetTcpSession(_tcpSession.SessionId);
-            _ = _serfClient.Connect(tcpSession.SessionId);
-            if (!tcpSession.Ready)
-            {
-                _logger.Here().Error("Serf client failed to connect");
-                return;
-            }
-
-            var leaveResult = await _serfClient.Leave(tcpSession.SessionId);
-        }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <returns></returns>
-        public async Task JoinSeedNodes()
-        {
-            if (_tcpSession == null)
-            {
-                Ready();
-            }
-
-            var tcpSession = _serfClient.GetTcpSession(_tcpSession.SessionId);
-            _ = _serfClient.Connect(tcpSession.SessionId);
-            if (!tcpSession.Ready)
-            {
-                _logger.Here().Error("Serf client failed to connect");
-                return;
-            }
-
-            var seedNodes = new SeedNode(_serfClient.SeedNodes.Seeds.Select(x => x));
-            var joinResult = await _serfClient.Join(seedNodes.Seeds, tcpSession.SessionId);
-        }
+        public ISerfClientV2 SerfClient { get; }
     }
 }

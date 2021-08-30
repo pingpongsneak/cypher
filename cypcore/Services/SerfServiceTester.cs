@@ -10,12 +10,12 @@ namespace CYPCore.Services
 {
     public class SerfServiceTester : ISerfService
     {
-        private readonly ISerfClient _serfClient;
+        private readonly ISerfClientV2 _serfClient;
         private readonly ISigning _signing;
         private IHostApplicationLifetime _hostApplicationLifetime;
         private readonly ILogger _logger;
 
-        public SerfServiceTester(ISerfClient serfClient, ISigning signing, ILogger logger)
+        public SerfServiceTester(ISerfClientV2 serfClient, ISigning signing, ILogger logger)
         {
             _serfClient = serfClient;
             _signing = signing;

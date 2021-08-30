@@ -50,7 +50,7 @@ namespace CYPCore.Ledger
 
         private readonly IGraph _graph;
         private readonly IMemoryPool _memoryPool;
-        private readonly ISerfClient _serfClient;
+        private readonly ISerfClientV2 _serfClient;
         private readonly IUnitOfWork _unitOfWork;
         private readonly ISigning _signing;
         private readonly IValidator _validator;
@@ -60,7 +60,7 @@ namespace CYPCore.Ledger
         private readonly StakingConfigurationOptions _stakingConfigurationOptions;
         private readonly IDisposable _timer;
 
-        public PosMinting(IGraph graph, IMemoryPool memoryPool, ISerfClient serfClient, IUnitOfWork unitOfWork,
+        public PosMinting(IGraph graph, IMemoryPool memoryPool, ISerfClientV2 serfClient, IUnitOfWork unitOfWork,
             ISigning signing, IValidator validator, ISync sync, StakingConfigurationOptions stakingConfigurationOptions,
             ILogger logger)
         {
