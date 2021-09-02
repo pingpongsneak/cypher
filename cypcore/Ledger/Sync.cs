@@ -112,16 +112,11 @@ namespace CYPCore.Ledger
                         localLastBlockHash = BitConverter.ToString(localLastBlock.ToHash());
                     }
 
-                    Task<BlockHashPeer>[] networkPeerTasks;
+                    Task<BlockHashPeer>[] networkPeerTasks = null;
 
                     if (_syncWithSeedNodes)
                     {
-                        networkPeerTasks =
-                            _localNode.SerfClient.SeedNodes.Seeds.Select(seed =>
-                                    _networkClient.GetPeerLastBlockHashAsync(peers.First(x =>
-                                            x.Value.Host.Contains(seed[..^seed.IndexOf(":", StringComparison.Ordinal)]))
-                                        .Value))
-                                .ToArray();
+
                     }
                     else
                     {

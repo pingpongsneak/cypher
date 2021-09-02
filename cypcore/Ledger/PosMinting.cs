@@ -17,8 +17,8 @@ using CYPCore.Cryptography;
 using CYPCore.Extensions;
 using CYPCore.Helper;
 using CYPCore.Models;
+using CYPCore.Network;
 using CYPCore.Persistence;
-using CYPCore.Serf;
 using Dawn;
 using libsignal.ecc;
 using MessagePack;
@@ -50,7 +50,7 @@ namespace CYPCore.Ledger
 
         private readonly IGraph _graph;
         private readonly IMemoryPool _memoryPool;
-        private readonly ISerfClient _serfClient;
+        private readonly IGossip _gossip;
         private readonly IUnitOfWork _unitOfWork;
         private readonly ISigning _signing;
         private readonly IValidator _validator;
@@ -60,13 +60,13 @@ namespace CYPCore.Ledger
         private readonly StakingConfigurationOptions _stakingConfigurationOptions;
         private readonly IDisposable _timer;
 
-        public PosMinting(IGraph graph, IMemoryPool memoryPool, ISerfClient serfClient, IUnitOfWork unitOfWork,
+        public PosMinting(IGraph graph, IMemoryPool memoryPool, IGossip gossip, IUnitOfWork unitOfWork,
             ISigning signing, IValidator validator, ISync sync, StakingConfigurationOptions stakingConfigurationOptions,
             ILogger logger)
         {
             _graph = graph;
             _memoryPool = memoryPool;
-            _serfClient = serfClient;
+            _gossip = gossip;
             _unitOfWork = unitOfWork;
             _signing = signing;
             _validator = validator;
@@ -233,13 +233,13 @@ namespace CYPCore.Ledger
             Guard.Argument(prevBlock, nameof(prevBlock)).NotNull();
             var blockGraph = new BlockGraph
             {
-                Block = new Consensus.Models.Block(Hasher.Hash(block.Height.ToBytes()).ToString(), _serfClient.ClientId,
+                Block = new Consensus.Models.Block(Hasher.Hash(block.Height.ToBytes()).ToString(), _gossip.Id,
                     block.Height, MessagePackSerializer.Serialize(block)),
                 Prev = new Consensus.Models.Block
                 {
                     Data = MessagePackSerializer.Serialize(prevBlock),
                     Hash = Hasher.Hash(prevBlock.Height.ToBytes()).ToString(),
-                    Node = _serfClient.ClientId,
+                    Node = _gossip.Id,
                     Round = prevBlock.Height
                 }
             };
@@ -339,7 +339,7 @@ namespace CYPCore.Ledger
                     },
                     Reward = reward,
                     Memo =
-                        $"Coinstake {_serfClient.SerfConfigurationOptions.NodeName}: {pub.ByteToHex().ShorterString()}",
+                        $"Coinstake {_gossip.Name}: {pub.ByteToHex().ShorterString()}",
                     SessionType = SessionType.Coinstake
                 };
 

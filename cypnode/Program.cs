@@ -126,11 +126,11 @@ namespace CYPNode
                 .UseServiceProviderFactory(new AutofacServiceProviderFactory())
                 .ConfigureWebHostDefaults(webBuilder =>
                 {
-                    ApiConfigurationOptions apiConfigurationOptions = new();
-                    configurationRoot.Bind("Api", apiConfigurationOptions);
+                    AppConfigurationOptions appConfigurationOptions = new();
+                    configurationRoot.Bind("Node", appConfigurationOptions);
 
                     webBuilder.UseStartup<Startup>()
-                        .UseUrls(apiConfigurationOptions.Listening)
+                        .UseUrls(appConfigurationOptions.WebApi.Listening)
                         .UseSerilog();
                 });
     }

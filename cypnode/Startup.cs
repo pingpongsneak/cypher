@@ -15,6 +15,7 @@ using CYPCore.Consensus;
 using CYPCore.Extensions;
 using CYPCore.Models;
 using CYPCore.Network;
+using GossipMesh.Core;
 using Polly;
 using Polly.Extensions.Http;
 using Polly.Timeout;
@@ -59,6 +60,7 @@ namespace CYPNode
                 .Configure<NetworkSetting>(options => _configuration.GetSection("Network").Bind(options));
             services.Configure<PbftOptions>(_configuration);
             services.AddDataKeysProtection(_configuration);
+            services.AddSingleton<IMemberListener, MemberListener>();
         }
 
         /// <summary>
@@ -83,14 +85,12 @@ namespace CYPNode
         {
             builder.AddSerilog();
             builder.AddNodeMonitorService(_configuration);
-            builder.AddSwimGossipClient(_configuration);
-            builder.AddSerfProcessService(_configuration);
+            builder.AddGossip(_configuration);
             builder.AddUnitOfWork(_configuration);
             builder.AddGraph();
             builder.AddMemoryPool();
             builder.AddSigning();
             builder.AddValidator();
-            builder.AddMembershipService();
             builder.AddPosMinting(_configuration);
             builder.AddLocalNode();
             builder.AddSync(_configuration);

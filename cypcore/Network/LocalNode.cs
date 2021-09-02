@@ -8,7 +8,6 @@ using System.Collections.Generic;
 using Dawn;
 using Serilog;
 using CYPCore.Extensions;
-using CYPCore.Serf;
 using CYPCore.Models;
 
 namespace CYPCore.Network
@@ -21,11 +20,8 @@ namespace CYPCore.Network
         Task Broadcast(TopicType topicType, byte[] data);
         Task Broadcast(Peer[] peers, TopicType topicType, byte[] data);
         Task<Dictionary<ulong, Peer>> GetPeers();
-        void Ready();
-        Task Leave();
-        Task JoinSeedNodes();
         Task<ulong[]> Nodes();
-        public ISerfClient SerfClient { get; }
+        public IGossip Gossip { get; }
     }
 
     /// <summary>
@@ -33,24 +29,18 @@ namespace CYPCore.Network
     /// </summary>
     public class LocalNode : ILocalNode
     {
-        private readonly ISerfClient _serfClient;
+        public IGossip Gossip { get; }
+        
+        private readonly IGossip _gossip;
         private readonly NetworkClient _networkClient;
         private readonly ILogger _logger;
-        private TcpSession _tcpSession;
 
-        public LocalNode(ISerfClient serfClient, NetworkClient networkClient, ILogger logger)
+        public LocalNode(IGossip gossip, NetworkClient networkClient, ILogger logger)
         {
-            _serfClient = serfClient;
+            _gossip = gossip;
             _networkClient = networkClient;
             _logger = logger.ForContext("SourceContext", nameof(LocalNode));
-            SerfClient = _serfClient;
-        }
-
-        public void Ready()
-        {
-            _tcpSession = _serfClient.TcpSessionsAddOrUpdate(
-                new TcpSession(_serfClient.SerfConfigurationOptions.Listening).Connect(_serfClient
-                    .SerfConfigurationOptions.RPC));
+            Gossip = gossip;
         }
 
         /// <summary>
@@ -65,10 +55,7 @@ namespace CYPCore.Network
             var peers = await GetPeers();
             if (!peers.Any())
             {
-                // TODO: Temporary solution until we remove or fix Serf.
-                // Hard coding default ports for now as this won't cause any issues as long as we have some of the seed nodes with these settings.  
-                var seedPeers = _serfClient.SeedNodes.Seeds.Select(x => new Peer {Host = x.Replace("7946", "7000")});
-                await Broadcast(seedPeers.ToArray(), topicType, data);
+                await Broadcast(peers.Values.ToArray(), topicType, data);
                 return;
             }
 
@@ -130,114 +117,7 @@ namespace CYPCore.Network
         public async Task<Dictionary<ulong, Peer>> GetPeers()
         {
             var peers = new Dictionary<ulong, Peer>();
-            
-            try
-            {
-                if (_tcpSession == null)
-                {
-                    Ready();
-                }
-
-                var tcpSession = _serfClient.GetTcpSession(_tcpSession.SessionId);
-                _ = await _serfClient.Connect(tcpSession.SessionId);
-                if (!tcpSession.Ready)
-                {
-                    _logger.Here().Error("Serf client failed to connect");
-                    return null;
-                }
-
-                var membersResult = await _serfClient.Members(tcpSession.SessionId);
-                var members = membersResult.Value.Members.ToList();
-                foreach (var member in members.Where(member =>
-                    _serfClient.Name != member.Name &&
-                    member.Status == "alive" &&
-                    member.Tags.ContainsKey("pubkey") &&
-                    member.Tags.ContainsKey("rest")))
-                {
-                    try
-                    {
-                        if (_serfClient.ClientId == Helper.Util.HashToId(member.Tags["pubkey"])) continue;
-                        member.Tags.TryGetValue("rest", out var restEndpoint);
-                        if (string.IsNullOrEmpty(restEndpoint)) continue;
-                        if (!Uri.TryCreate($"{restEndpoint}", UriKind.Absolute, out var uri)) continue;
-                        if (uri.Host is "0.0.0.0" or "::0")
-                        {
-                            continue;
-                        }
-
-                        member.Tags.TryGetValue("nodeversion", out var nodeVersion);
-
-                        var peer = new Peer
-                        {
-                            Host = uri.OriginalString,
-                            ClientId = Helper.Util.HashToId(member.Tags["pubkey"]),
-                            PublicKey = member.Tags["pubkey"],
-                            NodeName = member.Name,
-                            NodeVersion = nodeVersion ?? string.Empty
-                        };
-                        if (peers.ContainsKey(peer.ClientId)) continue;
-                        if (peers.TryAdd(peer.ClientId, peer)) continue;
-                        _logger.Here().Error("Failed adding or exists in remote nodes: {@Node}", member.Name);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.Here().Error(ex, "Error reading member");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.Here().Error(ex, "Error reading members");
-            }
-            
             return peers;
-        }
-
-        public ISerfClient SerfClient { get; }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <returns></returns>
-        public async Task Leave()
-        {
-            if (_tcpSession == null)
-            {
-                Ready();
-            }
-
-            var tcpSession = _serfClient.GetTcpSession(_tcpSession.SessionId);
-            _ = _serfClient.Connect(tcpSession.SessionId);
-            if (!tcpSession.Ready)
-            {
-                _logger.Here().Error("Serf client failed to connect");
-                return;
-            }
-
-            var leaveResult = await _serfClient.Leave(tcpSession.SessionId);
-        }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <returns></returns>
-        public async Task JoinSeedNodes()
-        {
-            if (_tcpSession == null)
-            {
-                Ready();
-            }
-
-            var tcpSession = _serfClient.GetTcpSession(_tcpSession.SessionId);
-            _ = _serfClient.Connect(tcpSession.SessionId);
-            if (!tcpSession.Ready)
-            {
-                _logger.Here().Error("Serf client failed to connect");
-                return;
-            }
-
-            var seedNodes = new SeedNode(_serfClient.SeedNodes.Seeds.Select(x => x));
-            var joinResult = await _serfClient.Join(seedNodes.Seeds, tcpSession.SessionId);
         }
     }
 }

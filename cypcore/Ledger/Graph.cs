@@ -18,7 +18,6 @@ using CYPCore.Extensions;
 using CYPCore.Models;
 using CYPCore.Network;
 using CYPCore.Persistence;
-using CYPCore.Serf;
 using Dawn;
 using Fibrous.Agents;
 using MessagePack;
@@ -46,7 +45,7 @@ namespace CYPCore.Ledger
         
         private readonly IUnitOfWork _unitOfWork;
         private readonly ILocalNode _localNode;
-        private readonly ISerfClient _serfClient;
+        private readonly IGossip _gossip;
         private readonly IValidator _validator;
         private readonly ISigning _signing;
         private readonly ILogger _logger;
@@ -69,12 +68,12 @@ namespace CYPCore.Ledger
 
         private EventHandler<BlockGraphEventArgs> _blockGraphAddCompletedEventHandler;
 
-        public Graph(IUnitOfWork unitOfWork, ILocalNode localNode, ISerfClient serfClient, IValidator validator,
+        public Graph(IUnitOfWork unitOfWork, ILocalNode localNode, IGossip gossip, IValidator validator,
             ISigning signing, IHostApplicationLifetime applicationLifetime, ILogger logger)
         {
             _unitOfWork = unitOfWork;
             _localNode = localNode;
-            _serfClient = serfClient;
+            _gossip = gossip;
             _validator = validator;
             _signing = signing;
             _logger = logger.ForContext("SourceContext", nameof(Graph));
@@ -155,7 +154,7 @@ namespace CYPCore.Ledger
                         var quorum2F1 = 2 * f + 1;
                         if (nodeCount < quorum2F1) return;
                         var lastInterpreted = GetRound();
-                        var config = new Config(lastInterpreted, Array.Empty<ulong>(), _serfClient.ClientId,
+                        var config = new Config(lastInterpreted, Array.Empty<ulong>(), _gossip.Id,
                             (ulong)nodeCount);
                         var blockmania = new Blockmania(config, _logger) { NodeCount = nodeCount };
                         blockmania.TrackingDelivered.Subscribe(x =>
@@ -394,12 +393,12 @@ namespace CYPCore.Ledger
             var blockGraph = new BlockGraph
             {
                 Block = new Consensus.Models.Block(Hasher.Hash(next.Height.ToBytes()).ToString(),
-                    _serfClient.ClientId, next.Height, block),
+                    _gossip.Id, next.Height, block),
                 Prev = new Consensus.Models.Block
                 {
                     Data = prevBlock,
                     Hash = Hasher.Hash(prev.Height.ToBytes()).ToString(),
-                    Node = _serfClient.ClientId,
+                    Node = _gossip.Id,
                     Round = prev.Height
                 }
             };
@@ -415,7 +414,7 @@ namespace CYPCore.Ledger
             Guard.Argument(blockGraph, nameof(blockGraph)).NotNull();
             try
             {
-                var copy = blockGraph.Block.Node != _serfClient.ClientId;
+                var copy = blockGraph.Block.Node != _gossip.Id;
                 if (copy)
                 {
                     var saved = await SaveBlockGraph(blockGraph);
